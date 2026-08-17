@@ -1,18 +1,22 @@
-# character-recognize-mcp
+# Akashic 插画识别插件
 
-Akashic Plugin API v2 插件。它通过兼容 OpenAI Chat Completions 的视觉模型识别动漫插画中的角色和作品，并结合 SauceNAO、Trace.moe 反查 Pixiv、画师及动画截图出处。
+在 Akashic 中识别动漫插画里的角色和作品，并反查 Pixiv 原图、画师或动画截图出处。
 
-## MCP 工具
+## 使用前准备
 
-- `recognize_character(image_path)`：只做角色与作品识别。
-- `reverse_search(image_path)`：调用 SauceNAO 与 Trace.moe 反查来源。
-- `recognize_illustration(image_path)`：完成视觉识别、来源反查与最终融合裁决。
+必须准备：
 
-所有工具都返回 JSON 字符串。置信度低于 `0.7` 的条目只进入 `ambiguous`，不会作为命中；`source_links` 始终存在，无法确认来源时为 `[]`。
+- 一个支持图片输入、兼容 OpenAI Chat Completions 接口的视觉模型 API Key。
+- 默认使用阿里云百炼 DashScope 的 `qwen-vl-max`。
+
+可选准备：
+
+- SauceNAO API Key。没有 Key 也能匿名反查，但额度更低。
+- Trace.moe 不需要配置 Key。
 
 ## 安装
 
-Akashic 只安装 Git 已提交快照。从 Akashic 仓库执行：
+在 Akashic 仓库中执行：
 
 ```bash
 .venv/bin/python main.py plugin-install \
@@ -20,15 +24,15 @@ Akashic 只安装 Git 已提交快照。从 Akashic 仓库执行：
   --marketplace github
 ```
 
-安装输出会给出插件数据目录，默认类似：
+安装完成后，终端会显示插件数据目录，通常类似：
 
 ```text
-<workspace>/plugin-data/character-recognize-github/
+<Akashic 工作目录>/plugin-data/character-recognize-github/
 ```
 
 ## 配置
 
-在插件数据目录创建权限为 `0600` 的 `config.local.toml`。默认视觉模型为 DashScope compatible-mode 的 `qwen-vl-max`：
+在插件数据目录中创建 `config.local.toml`：
 
 ```toml
 request_timeout_seconds = 30
@@ -36,56 +40,64 @@ rate_limit_enabled = true
 
 [vision]
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-api_key = "<DASHSCOPE_API_KEY>"
+api_key = "<你的 DASHSCOPE_API_KEY>"
 model = "qwen-vl-max"
 
 [saucenao]
-api_key = "<SAUCENAO_API_KEY>"
+api_key = "<你的 SAUCENAO_API_KEY>"
 ```
 
-SauceNAO Key 可以省略，此时使用匿名模式。`rate_limit_enabled = true` 时插件保证同一 MCP 进程内两次 SauceNAO 请求间隔不少于 8 秒，建议保持开启。
+`vision.api_key` 必须填写。没有 SauceNAO Key 时，删除 `[saucenao]` 两行即可使用匿名模式。
 
-密钥也可以通过 Akashic 宿主进程环境变量提供，环境变量优先于配置文件：
+限制私密配置文件的访问权限：
 
-```text
-CHARACTER_RECOGNIZE_VISION_API_KEY
-CHARACTER_RECOGNIZE_SAUCENAO_API_KEY
+```bash
+chmod 600 /path/to/plugin-data/character-recognize-github/config.local.toml
 ```
 
-不要把密钥放进仓库、日志、命令行参数或聊天消息。配置完成后可运行：
+不要把 API Key 写入仓库、命令行参数或聊天消息。
+
+配置完成后检查插件：
 
 ```bash
 .venv/bin/python main.py plugin-doctor character-recognize@github
 ```
 
-### OpenCode Go / mimo-v2.5
+检查通过后，重新打开一个 Akashic 会话，让新会话加载插件。
 
-视觉客户端使用标准 compatible-mode 消息格式。切换到 OpenCode Go 时，只需在私密配置中替换服务提供方给出的 HTTPS `base_url`、API Key 与模型名：
+## 怎么用
+
+先确保图片位于运行 Akashic 的电脑上。支持 JPEG、PNG、WebP 和 GIF，单张图片不能超过 20 MiB。
+
+在 Akashic 对话中直接提供图片的绝对路径，例如：
+
+```text
+识别这张插画里的角色和出处：/Users/me/Pictures/example.png
+```
+
+也可以只查询其中一项：
+
+```text
+这张图里是谁：/Users/me/Pictures/example.png
+```
+
+```text
+帮我找这张图的 Pixiv 原图和画师：/Users/me/Pictures/example.png
+```
+
+识别结果会区分“已命中”和“疑似候选”。置信度低于 0.7 的结果不会被当作确认答案；没有可靠来源时，插件不会编造 Pixiv 链接。
+
+## 使用其他视觉模型
+
+插件也支持其他 OpenAI compatible 图片模型。以 OpenCode Go 的 `mimo-v2.5` 为例，将 `[vision]` 替换为服务商提供的配置：
 
 ```toml
 [vision]
-base_url = "<OPENCODE_GO_COMPATIBLE_BASE_URL>"
-api_key = "<OPENCODE_GO_API_KEY>"
+base_url = "<服务商提供的 compatible API 地址>"
+api_key = "<你的 API Key>"
 model = "mimo-v2.5"
 ```
 
-## 调用方式
+接口地址必须使用 HTTPS，并且模型必须支持图片输入。
 
-工具参数必须是 Akashic 主机可读取的本地图片绝对路径，支持 JPEG、PNG、WebP 和 GIF，单文件不超过 20 MiB。例如：
-
-```json
-{"image_path":"/absolute/path/to/illustration.png"}
-```
-
-综合识别结果包含 `visual`、`reverse_search`、`final_verdict`、`ambiguous` 与 `source_links`。来源链接按 Pixiv 原图页、SauceNAO 外部来源（含 Danbooru）、Trace.moe 动画截图的优先级排列，不生成占位链接。
-
-## 开发验证
-
-```bash
-python -m pip install -r mcp/requirements.txt -r requirements-dev.txt
-pytest
-PYTHONPATH=/path/to/plugin-contracts \
-  python -m akashic_plugin_contracts check plugin.py
-```
-
-测试使用假的视觉与反查响应，不调用真实 API，也不需要任何密钥。
+开发者需要查看 MCP 工具、返回结构、环境变量和测试方式时，请阅读 [开发文档](docs/development.md)。

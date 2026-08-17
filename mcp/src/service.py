@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
-from .client import validate_image_path
+from .client import RecognitionApiError, validate_image_path
 
 CONFIDENCE_THRESHOLD = 0.7
 
@@ -78,55 +79,167 @@ class CharacterRecognitionService:
 
     def reverse_search(self, image_path: str) -> dict[str, Any]:
         path = validate_image_path(image_path)
-        sauce = normalize_saucenao(self._saucenao.search(path))
-        trace = normalize_trace_moe(self._trace_moe.search(path))
-        matches, ambiguous = _split_confidence([*sauce, *trace])
-        return {
-            "matches": matches,
-            "ambiguous": ambiguous,
-            "source_links": collect_source_links([*sauce, *trace]),
-        }
+        outcomes, errors = _run_parallel(
+            {
+                "saucenao": lambda: self._saucenao.search(path),
+                "trace_moe": lambda: self._trace_moe.search(path),
+            }
+        )
+        reverse, _ = _reverse_result(outcomes, errors)
+        return reverse
 
     def recognize_illustration(self, image_path: str) -> dict[str, Any]:
         path = validate_image_path(image_path)
         vision = self._vision_client()
-        visual_raw = vision.complete(path, SYSTEM_PROMPT, CHARACTER_PROMPT)
-        visual = normalize_visual_result(parse_json_object(visual_raw))
-        sauce = normalize_saucenao(self._saucenao.search(path))
-        trace = normalize_trace_moe(self._trace_moe.search(path))
-        reverse_items = [*sauce, *trace]
-        reverse_matches, reverse_ambiguous = _split_confidence(reverse_items)
-        reverse = {
-            "matches": reverse_matches,
-            "ambiguous": reverse_ambiguous,
-            "source_links": collect_source_links(reverse_items),
-        }
+        outcomes, errors = _run_parallel(
+            {
+                "vision": lambda: vision.complete(
+                    path, SYSTEM_PROMPT, CHARACTER_PROMPT
+                ),
+                "saucenao": lambda: self._saucenao.search(path),
+                "trace_moe": lambda: self._trace_moe.search(path),
+            }
+        )
+        reverse_errors = [
+            error for error in errors if error["stage"] in {"saucenao", "trace_moe"}
+        ]
+        reverse, sauce = _reverse_result(outcomes, reverse_errors)
+
+        visual_raw = outcomes.get("vision")
+        if not isinstance(visual_raw, str):
+            visual_error = next(
+                (error for error in errors if error["stage"] == "vision"),
+                _failure("vision", TypeError("视觉模型没有返回文本")),
+            )
+            visual = _failed_visual(visual_error)
+            return _combined_result(visual, reverse, None, errors)
+        try:
+            visual = normalize_visual_result(parse_json_object(visual_raw))
+        except (TypeError, ValueError) as error:
+            visual_error = _failure("vision", error)
+            errors.append(visual_error)
+            visual = _failed_visual(visual_error)
+            return _combined_result(visual, reverse, None, errors)
+
         evidence = {"visual_evidence": visual, "reverse_search": reverse}
         fusion_prompt = FUSION_PROMPT_TEMPLATE.replace(
             "{reverse_results}",
             json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
         )
-        fused_raw = vision.complete(path, SYSTEM_PROMPT, fusion_prompt)
         verified_pixiv_ids = {
             item["pixiv_id"] for item in sauce if isinstance(item.get("pixiv_id"), int)
         }
-        fused = normalize_fusion_result(
-            parse_json_object(fused_raw),
-            verified_pixiv_ids=verified_pixiv_ids,
+        try:
+            fused_raw = vision.complete(path, SYSTEM_PROMPT, fusion_prompt)
+            fused = normalize_fusion_result(
+                parse_json_object(fused_raw),
+                verified_pixiv_ids=verified_pixiv_ids,
+            )
+        except (RecognitionApiError, TypeError, ValueError) as error:
+            errors.append(_failure("fusion", error))
+            fused = {"final_verdict": None, "ambiguous": []}
+        return _combined_result(
+            visual,
+            reverse,
+            fused["final_verdict"],
+            errors,
+            fusion_ambiguous=fused["ambiguous"],
         )
-        ambiguous = [*visual["ambiguous"], *reverse_ambiguous, *fused["ambiguous"]]
-        return {
-            "visual": visual,
-            "reverse_search": reverse,
-            "final_verdict": fused["final_verdict"],
-            "ambiguous": ambiguous,
-            "source_links": reverse["source_links"],
-        }
 
     def _vision_client(self) -> VisionClient:
         if self._vision is None:
             raise RuntimeError("当前操作需要视觉模型客户端")
         return self._vision
+
+
+def _run_parallel(
+    jobs: Mapping[str, Callable[[], object]],
+) -> tuple[dict[str, object], list[dict[str, str]]]:
+    outcomes: dict[str, object] = {}
+    errors: list[dict[str, str]] = []
+    with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+        futures = {stage: executor.submit(job) for stage, job in jobs.items()}
+        for stage, future in futures.items():
+            try:
+                outcomes[stage] = future.result()
+            # Provider failures are isolated so sibling results remain usable.
+            except Exception as error:  # noqa: BLE001
+                errors.append(_failure(stage, error))
+    return outcomes, errors
+
+
+def _reverse_result(
+    outcomes: Mapping[str, object],
+    errors: list[dict[str, str]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    sauce_raw = outcomes.get("saucenao")
+    trace_raw = outcomes.get("trace_moe")
+    sauce = normalize_saucenao(sauce_raw) if isinstance(sauce_raw, Mapping) else []
+    trace = normalize_trace_moe(trace_raw) if isinstance(trace_raw, Mapping) else []
+    items = [*sauce, *trace]
+    matches, ambiguous = _split_confidence(items)
+    return (
+        {
+            "matches": matches,
+            "ambiguous": ambiguous,
+            "source_links": collect_source_links(items),
+            "errors": errors,
+        },
+        sauce,
+    )
+
+
+def _combined_result(
+    visual: dict[str, Any],
+    reverse: dict[str, Any],
+    final_verdict: dict[str, Any] | None,
+    errors: list[dict[str, str]],
+    *,
+    fusion_ambiguous: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    ambiguous = [
+        *visual["ambiguous"],
+        *reverse["ambiguous"],
+        *(fusion_ambiguous or []),
+    ]
+    return {
+        "visual": visual,
+        "reverse_search": reverse,
+        "final_verdict": final_verdict,
+        "ambiguous": ambiguous,
+        "source_links": reverse["source_links"],
+        "errors": errors,
+    }
+
+
+def _failed_visual(error: dict[str, str]) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "characters": [],
+        "ambiguous": [],
+        "scene": "",
+        "source_links": [],
+        "error": error,
+    }
+
+
+def _failure(stage: str, error: Exception) -> dict[str, str]:
+    labels = {
+        "vision": "视觉模型",
+        "saucenao": "SauceNAO",
+        "trace_moe": "Trace.moe",
+        "fusion": "融合裁决",
+    }
+    result = {
+        "stage": stage,
+        "status": "failed",
+        "message": f"{labels.get(stage, stage)}调用失败",
+    }
+    if isinstance(error, (RecognitionApiError, TypeError, ValueError)):
+        detail = " ".join(str(error).split())[:300]
+        if detail:
+            result["detail"] = detail
+    return result
 
 
 def parse_json_object(value: object) -> dict[str, Any]:

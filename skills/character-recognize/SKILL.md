@@ -19,6 +19,7 @@ description: 识别本地动漫插画中的角色与作品，或通过 SauceNAO�
 - `characters`、`matches` 和 `final_verdict` 是置信度不低于 0.7 的命中。
 - `ambiguous` 只表示疑似候选，不得表述为已确认。
 - `final_verdict` 为 `null` 时明确说明证据不足，不要用模型常识补全角色或来源。
+- `errors` 非空时说明对应服务调用失败，同时继续使用其他服务已经返回的结果。
 - 原图和出处只使用 `source_links` 中的链接。数组为空时说明未反查到来源，不得伪造 Pixiv ID、链接或占位 URL。
 - 多角色结果按工具返回顺序展示，保留视觉证据和置信度。
 

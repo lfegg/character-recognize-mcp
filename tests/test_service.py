@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
+from src.client import RecognitionApiError
 from src.service import CharacterRecognitionService, parse_json_object
 
 
@@ -184,3 +186,103 @@ def test_unverified_fusion_pixiv_id_is_removed(tmp_path: Path) -> None:
     assert result["final_verdict"]["source"] == "unknown"
     assert "pixiv_id" not in result["final_verdict"]
     assert result["source_links"] == []
+
+
+def test_illustration_starts_vision_and_reverse_calls_in_parallel(
+    tmp_path: Path,
+) -> None:
+    barrier = threading.Barrier(3)
+
+    class ParallelVision:
+        def complete(
+            self,
+            image_path: Path,
+            system_prompt: str,
+            prompt: str,
+        ) -> str:
+            del image_path, system_prompt
+            if "所有动漫角色" in prompt:
+                barrier.wait(timeout=2)
+                return '{"characters": [], "scene": "测试"}'
+            return '{"final_verdict": null}'
+
+    class ParallelReverse:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.payload = payload
+
+        def search(self, image_path: Path) -> dict[str, Any]:
+            del image_path
+            barrier.wait(timeout=2)
+            return self.payload
+
+    service = CharacterRecognitionService(
+        ParallelVision(),
+        ParallelReverse({"results": []}),
+        ParallelReverse({"result": []}),
+    )
+
+    result = service.recognize_illustration(image_file(tmp_path))
+
+    assert result["errors"] == []
+    assert result["final_verdict"] is None
+
+
+def test_vision_failure_keeps_reverse_results(tmp_path: Path) -> None:
+    class FailingVision:
+        def complete(
+            self,
+            image_path: Path,
+            system_prompt: str,
+            prompt: str,
+        ) -> str:
+            del image_path, system_prompt, prompt
+            raise RecognitionApiError("视觉服务暂时不可用")
+
+    sauce = FakeReverse(
+        {
+            "results": [
+                {
+                    "header": {"similarity": "90"},
+                    "data": {"pixiv_id": 123456, "title": "已找到的来源"},
+                }
+            ]
+        }
+    )
+    service = CharacterRecognitionService(
+        FailingVision(), sauce, FakeReverse({"result": []})
+    )
+
+    result = service.recognize_illustration(image_file(tmp_path))
+
+    assert result["visual"]["status"] == "failed"
+    assert result["visual"]["error"]["message"] == "视觉模型调用失败"
+    assert result["reverse_search"]["matches"][0]["pixiv_id"] == 123456
+    assert result["source_links"] == ["https://www.pixiv.net/artworks/123456"]
+    assert result["final_verdict"] is None
+
+
+def test_reverse_search_keeps_success_when_one_provider_fails(tmp_path: Path) -> None:
+    class FailingReverse:
+        def search(self, image_path: Path) -> dict[str, Any]:
+            del image_path
+            raise RecognitionApiError("SauceNAO 限流")
+
+    trace = FakeReverse(
+        {
+            "result": [
+                {
+                    "similarity": 0.88,
+                    "episode": 2,
+                    "image": "https://api.trace.moe/image/success.jpg",
+                    "anilist": {"title": {"native": "测试动画"}},
+                }
+            ]
+        }
+    )
+    service = CharacterRecognitionService(FakeVision([]), FailingReverse(), trace)
+
+    result = service.reverse_search(image_file(tmp_path))
+
+    assert result["matches"][0]["provider"] == "trace_moe"
+    assert result["source_links"] == ["https://api.trace.moe/image/success.jpg"]
+    assert result["errors"][0]["stage"] == "saucenao"

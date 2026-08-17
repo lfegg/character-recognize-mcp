@@ -48,10 +48,6 @@ class CompatibleVisionClient:
         *,
         session: HttpTransport | None = None,
     ) -> None:
-        if not config.vision.api_key:
-            raise RecognitionApiError(
-                "未配置视觉模型 API Key；请写入 plugin-data 或环境变量"
-            )
         self._base_url = config.vision.base_url
         self._api_key = config.vision.api_key
         self._model = config.vision.model
@@ -59,6 +55,10 @@ class CompatibleVisionClient:
         self._session: HttpTransport = session or requests
 
     def complete(self, image_path: Path, system_prompt: str, prompt: str) -> str:
+        if not self._api_key:
+            raise RecognitionApiError(
+                "未配置视觉模型 API Key；请写入 plugin-data 或环境变量"
+            )
         mime_type, image_data = _read_image(image_path)
         payload = {
             "model": self._model,

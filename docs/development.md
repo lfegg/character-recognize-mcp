@@ -15,7 +15,7 @@
 
 - `recognize_character(image_path)`：识别角色和作品。
 - `reverse_search(image_path)`：通过 SauceNAO 和 Trace.moe 反查来源。
-- `recognize_illustration(image_path)`：依次完成视觉识别、来源反查和融合裁决。
+- `recognize_illustration(image_path)`：并行执行视觉识别和两个来源反查，再执行融合裁决。
 
 工具返回 JSON 字符串。所有顶层结果都包含 `source_links`；没有可靠来源时为 `[]`。置信度低于 `0.7` 的项目进入 `ambiguous`，不进入命中结果。综合结果包含：
 
@@ -26,6 +26,8 @@
 - `source_links`：经过验证和去重的来源链接。
 
 来源链接依次优先展示 Pixiv 作品页、SauceNAO 外部来源或 Danbooru 条目、Trace.moe 动画截图。融合模型给出的 Pixiv ID 只有在 SauceNAO 候选中真实出现时才会保留。
+
+`recognize_illustration` 的第一阶段使用独立线程并行调用视觉模型、SauceNAO 和 Trace.moe。任何一个调用失败都只写入 `errors`，不会取消其他调用；视觉模型失败时跳过依赖视觉证据的融合步骤，保留并返回两个反查服务已经取得的结果。`reverse_search` 也会并行调用两个反查服务并允许部分成功。
 
 ## 私密配置
 

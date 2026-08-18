@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from agent.plugins import McpServerSpec, Plugin
+import json
+
+from agent.plugins import (
+    McpServerSpec,
+    Plugin,
+    PluginReadinessContext,
+    PluginSemanticCheck,
+)
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 DEFAULT_VISION_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -40,7 +47,7 @@ class CharacterRecognizeConfig(BaseModel):
 class CharacterRecognizePlugin(Plugin):
     api_version = 2
     name = "character-recognize"
-    version = "0.1.0"
+    version = "0.1.1"
     desc = "识别动漫插画中的角色与作品，并反查 Pixiv、画师和动画出处"
     author = "lfegg"
     ConfigModel = CharacterRecognizeConfig
@@ -55,5 +62,36 @@ class CharacterRecognizePlugin(Plugin):
             McpServerSpec(
                 name="character-recognize",
                 command=("python", "mcp/run_mcp.py"),
+                candidate_read_only_tools=("verify_installation",),
+            )
+        ]
+
+    async def readiness_semantic_checks(
+        self,
+        context: PluginReadinessContext,
+    ) -> list[PluginSemanticCheck]:
+        try:
+            server = context.mcp_catalog.servers["character-recognize"]
+            raw = await server.client.call("verify_installation", {})
+            payload = json.loads(raw)
+        except (KeyError, TypeError, ValueError, RuntimeError, OSError) as error:
+            return [
+                PluginSemanticCheck(
+                    "character_recognize_mcp_probe",
+                    False,
+                    {"error_type": type(error).__name__},
+                )
+            ]
+
+        expected = {
+            "status": "ok",
+            "server": "character-recognize",
+            "contract_version": 1,
+        }
+        return [
+            PluginSemanticCheck(
+                "character_recognize_mcp_probe",
+                payload == expected,
+                payload,
             )
         ]

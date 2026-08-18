@@ -16,7 +16,7 @@
 
 ## 安装
 
-在 Akashic 仓库中执行：
+插件安装必须由 Akashic 当前正在运行的会话发起。请在对话中要求 Akashic 安装本插件；Akashic 会在当前 active turn 中执行：
 
 ```bash
 .venv/bin/python main.py plugin-install \
@@ -29,6 +29,8 @@
 ```text
 <Akashic 工作目录>/plugin-data/character-recognize-github/
 ```
+
+安装命令完成后，安装操作所在的 Akashic turn 必须启动 attached programmatic child 验证候选版本。候选只向验证 child 暴露无网络、无凭据的 `verify_installation` 探针；探针成功后正常结束 child 和父 turn，Core 才会自动切换版本，下一 turn 生效。不要在 Akashic 会话之外直接运行安装命令，也不需要重启 Akashic。
 
 ## 配置
 
@@ -63,7 +65,7 @@ chmod 600 /path/to/plugin-data/character-recognize-github/config.local.toml
 .venv/bin/python main.py plugin-doctor character-recognize@github
 ```
 
-检查通过后，重新打开一个 Akashic 会话，让新会话加载插件。
+`plugin-doctor` 应返回 `ok`。如果报告 MCP runtime 缺失、source symlink 越界或候选无法启动，这是 Akashic Core 的安装/runtime 问题，不应通过删除插件安全检查或改写本插件启动命令绕过。
 
 ## 怎么用
 

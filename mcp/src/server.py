@@ -35,6 +35,18 @@ def create_mcp_server(data_dir: Path) -> FastMCP:
         )
 
     @mcp.tool()
+    def verify_installation() -> str:
+        """验证候选 MCP 可调用；不读取凭据、不访问文件或网络。"""
+
+        return _json(
+            {
+                "status": "ok",
+                "server": "character-recognize",
+                "contract_version": 1,
+            }
+        )
+
+    @mcp.tool()
     def recognize_character(image_path: str) -> str:
         """识别本地插画中的动漫角色与作品；低于 0.7 的候选仅进入 ambiguous。"""
 

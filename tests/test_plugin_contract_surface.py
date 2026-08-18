@@ -24,7 +24,9 @@ def test_plugin_declares_v2_mcp_and_skill_roots() -> None:
 
     assert assignments["api_version"] == 2
     assert assignments["name"] == "character-recognize"
-    assert assignments["version"] == "0.1.0"
+    assert assignments["version"] == "0.1.1"
     source = PLUGIN.read_text(encoding="utf-8")
     assert 'return ("skills",)' in source
     assert 'command=("python", "mcp/run_mcp.py")' in source
+    assert 'candidate_read_only_tools=("verify_installation",)' in source
+    assert "def readiness_semantic_checks(" in source

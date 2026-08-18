@@ -13,6 +13,7 @@
 
 ## MCP 工具
 
+- `verify_installation()`：无配置、无文件和无网络副作用的候选安装探针。
 - `recognize_character(image_path)`：识别角色和作品。
 - `reverse_search(image_path)`：通过 SauceNAO 和 Trace.moe 反查来源。
 - `recognize_illustration(image_path)`：并行执行视觉识别和两个来源反查，再执行融合裁决。
@@ -28,6 +29,20 @@
 来源链接依次优先展示 Pixiv 作品页、SauceNAO 外部来源或 Danbooru 条目、Trace.moe 动画截图。融合模型给出的 Pixiv ID 只有在 SauceNAO 候选中真实出现时才会保留。
 
 `recognize_illustration` 的第一阶段使用独立线程并行调用视觉模型、SauceNAO 和 Trace.moe。任何一个调用失败都只写入 `errors`，不会取消其他调用；视觉模型失败时跳过依赖视觉证据的融合步骤，保留并返回两个反查服务已经取得的结果。`reverse_search` 也会并行调用两个反查服务并允许部分成功。
+
+## 候选安装验证
+
+`plugin.py` 只将 `verify_installation` 声明为 `candidate_read_only_tools`。三个真实识别工具需要图片或外部 API，因此不能用于无副作用的候选验证，也不能为了通过 gate 而错误标记为候选只读。
+
+候选准备阶段的 `readiness_semantic_checks` 会通过 candidate-owned MCP catalog 实际调用探针并校验固定 JSON 契约。随后 attached programmatic child 再成功调用同一探针，为 Core 提供 candidate-owned Tool evidence；父 turn 正常结束后才能自动切换。
+
+安装问题单中的以下问题属于 Akashic Core，无法在本插件内安全修复：
+
+- 安装器重复校验自己创建的 `.venv` 时误判标准 Python symlink 越界。
+- 已有 artifact 的 `.venv` 缺失或依赖变化时没有重建 runtime。
+- Python MCP 的 `.venv` 缺失时静默回退到宿主 Python，导致依赖错误不明确。
+
+这些问题应在 `akashic-agent` 的安装器和 runtime resolver 中修复。本插件不使用 shell/uv 包装器、系统绝对 Python 路径或提交 `.venv` 等方式规避，因为这些方案不可移植并会削弱依赖隔离。
 
 ## 私密配置
 

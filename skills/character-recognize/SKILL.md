@@ -9,6 +9,7 @@ description: 识别本地动漫插画中的角色与作品，或通过 SauceNAO�
 
 ## 工具选择
 
+- 验证刚安装的候选版本时调用无参数的 `verify_installation`；成功取得 `status=ok` 后结束 attached child，让父 turn 正常结束并由 Core 完成切换。此工具不用于普通识图请求。
 - 只询问角色或作品时调用 `recognize_character`。
 - 只询问原图、Pixiv、画师或动画出处时调用 `reverse_search`。
 - 同时需要角色与来源，或用户笼统要求“识别这张图”时调用 `recognize_illustration`。
